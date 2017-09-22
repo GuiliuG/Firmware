@@ -461,13 +461,19 @@ void Ekf2::run()
 	int airspeed_sub = orb_subscribe(ORB_ID(airspeed));
 	int params_sub = orb_subscribe(ORB_ID(parameter_update));
 	int optical_flow_sub = orb_subscribe(ORB_ID(optical_flow));
-	int range_finder_sub = orb_subscribe(ORB_ID(distance_sensor));
 	int ev_pos_sub = orb_subscribe(ORB_ID(vehicle_vision_position));
 	int ev_att_sub = orb_subscribe(ORB_ID(vehicle_vision_attitude));
 	int vehicle_land_detected_sub = orb_subscribe(ORB_ID(vehicle_land_detected));
 	int status_sub = orb_subscribe(ORB_ID(vehicle_status));
 	int sensor_selection_sub = orb_subscribe(ORB_ID(sensor_selection));
 	int sensor_baro_sub = orb_subscribe(ORB_ID(sensor_baro));
+
+	// because we can have several distance sensor instances with different orientations
+	int range_finder_subs[ORB_MULTI_MAX_INSTANCES];
+
+	for (unsigned i = 0; i < ORB_MULTI_MAX_INSTANCES; i++) {
+		range_finder_subs[i] = orb_subscribe_multi(ORB_ID(distance_sensor), i);
+	}
 
 	px4_pollfd_struct_t fds[1] = {};
 	fds[0].fd = sensors_sub;
@@ -570,14 +576,22 @@ void Ekf2::run()
 			orb_copy(ORB_ID(optical_flow), optical_flow_sub, &optical_flow);
 		}
 
-		orb_check(range_finder_sub, &range_finder_updated);
+		for (unsigned i = 0; i < ORB_MULTI_MAX_INSTANCES; i++) {
 
-		if (range_finder_updated) {
-			orb_copy(ORB_ID(distance_sensor), range_finder_sub, &range_finder);
+			orb_check(range_finder_subs[i], &range_finder_updated);
 
-			if (range_finder.min_distance >= range_finder.current_distance
-			    || range_finder.max_distance <= range_finder.current_distance) {
-				range_finder_updated = false;
+			if (range_finder_updated) {
+
+				orb_copy(ORB_ID(distance_sensor), range_finder_subs[i], &range_finder);
+
+				if (range_finder.orientation != distance_sensor_s::ROTATION_DOWNWARD_FACING
+				    || range_finder.min_distance >= range_finder.current_distance
+				    || range_finder.max_distance <= range_finder.current_distance) {
+					range_finder_updated = false;
+
+				} else {
+					break; // already the correct one -> break for loop
+				}
 			}
 		}
 
@@ -1356,13 +1370,17 @@ void Ekf2::run()
 	orb_unsubscribe(airspeed_sub);
 	orb_unsubscribe(params_sub);
 	orb_unsubscribe(optical_flow_sub);
-	orb_unsubscribe(range_finder_sub);
 	orb_unsubscribe(ev_pos_sub);
 	orb_unsubscribe(ev_att_sub);
 	orb_unsubscribe(vehicle_land_detected_sub);
 	orb_unsubscribe(status_sub);
 	orb_unsubscribe(sensor_selection_sub);
 	orb_unsubscribe(sensor_baro_sub);
+
+	for (unsigned i = 0; i < ORB_MULTI_MAX_INSTANCES; i++) {
+		orb_unsubscribe(range_finder_subs[i]);
+		range_finder_subs[i] = -1;
+	}
 }
 
 Ekf2 *Ekf2::instantiate(int argc, char *argv[])
